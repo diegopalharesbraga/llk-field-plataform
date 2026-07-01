@@ -4,30 +4,317 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LLK Field Platform</title>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
+
 <body>
   <div class="app">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">LLK</div><div><h1>Field Platform</h1><p>Clientes, correias e Radec's em campo</p></div></div>
+      <div class="brand">
+        <div class="brand-mark">LLK</div>
+
+        <div>
+          <h1>Field Platform</h1>
+          <p>Comercial, engenharia e mapa em uma plataforma</p>
+        </div>
+      </div>
+
       <nav>
-        <button class="nav-button active" data-page="mapPage">Mapa operacional</button>
-        <button class="nav-button" data-page="tablePage">Base de equipamentos</button>
-        <button class="nav-button" data-page="eventsPage">Historico e manutencao</button>
+        <button class="nav-button active" data-page="mapPage">Mapa geral</button>
+        <button class="nav-button" data-page="soldPage">Clientes vendidos</button>
+        <button class="nav-button" data-page="openPage">Negócios abertos</button>
+        <button class="nav-button" data-page="eventsPage">Histórico</button>
       </nav>
-      <div class="sidebar-panel"><span>Fonte principal</span><strong>Pipedrive + Engenharia</strong><p>Protótipo com 20 clientes fictícios. Preparado para API/webhook.</p></div>
+
+      <div class="sidebar-panel">
+        <span>Versão</span>
+        <strong>Commit v2 guiado</strong>
+        <p>
+          Separação entre vendidos e abertos, mapa satélite, Google Earth
+          e exportação KML.
+        </p>
+      </div>
     </aside>
+
     <main class="main">
-      <header class="topbar"><div><h2>Mapa de clientes e produtos em campo</h2><p>Visualize negócios ganhos, equipamentos instalados, posição na correia e revisões.</p></div><div class="top-actions"><button id="syncBtn" class="secondary">Sincronizar Pipedrive</button><button id="refreshBtn" class="primary">Atualizar tela</button></div></header>
-      <section class="kpis"><article class="kpi"><span>Clientes ativos</span><strong id="kpiClients">--</strong></article><article class="kpi"><span>Produtos em campo</span><strong id="kpiAssets">--</strong></article><article class="kpi warning"><span>Revisões próximas</span><strong id="kpiSoon">--</strong></article><article class="kpi danger"><span>Revisões vencidas</span><strong id="kpiLate">--</strong></article><article class="kpi"><span>Estados atendidos</span><strong id="kpiStates">--</strong></article></section>
-      <section class="filters"><label>Produto<select id="filterProduct"><option value="">Todos</option></select></label><label>Estado<select id="filterState"><option value="">Todos</option></select></label><label>Responsável LLK<select id="filterOwner"><option value="">Todos</option></select></label><label>Status revisão<select id="filterReview"><option value="">Todos</option></select></label><label>Situação campo<select id="filterFieldStatus"><option value="">Todas</option></select></label><label class="wide">Buscar<input id="filterSearch" type="search" placeholder="Cliente, cidade, produto, responsável..." /></label></section>
-      <section id="mapPage" class="page active"><div class="map-layout"><section class="card map-card"><div class="card-header"><div><h3>Mapa LLK</h3><p>Cor do marcador = status de revisão. Clique para abrir a ficha.</p></div><div class="legend"><span><i class="dot green"></i> Em dia</span><span><i class="dot yellow"></i> Próxima</span><span><i class="dot red"></i> Vencida</span></div></div><div id="map"></div></section><aside class="card detail-card" id="detailCard"><div class="empty"><h3>Selecione um marcador</h3><p>A ficha mostrará dados do cliente, telefone, produto, revisão, correia e histórico.</p></div></aside></div></section>
-      <section id="tablePage" class="page"><section class="card"><div class="card-header"><div><h3>Base de equipamentos em campo</h3><p>Dados unificados de cliente, negócio, produto e revisão.</p></div></div><div class="table-wrapper"><table><thead><tr><th>Cliente</th><th>Produto</th><th>Telefone</th><th>Cidade/UF</th><th>Responsável LLK</th><th>Situação</th><th>Correia</th><th>Revisão</th><th>Dias</th></tr></thead><tbody id="assetsTable"></tbody></table></div></section></section>
-      <section id="eventsPage" class="page"><section class="card"><div class="card-header"><div><h3>Histórico geral</h3><p>Eventos vindos do Pipedrive, engenharia e plataforma.</p></div></div><div id="eventsList" class="events-list"></div></section></section>
+      <header class="topbar">
+        <div>
+          <h2>Mapa LLK de clientes e oportunidades</h2>
+          <p>
+            Controle clientes vendidos, equipamentos em campo, revisões
+            e negócios ainda não vendidos.
+          </p>
+        </div>
+
+        <div class="top-actions">
+          <button id="exportKmlBtn" class="secondary">Exportar KML</button>
+          <button id="syncBtn" class="secondary">Sincronizar Pipedrive</button>
+          <button id="refreshBtn" class="primary">Atualizar tela</button>
+        </div>
+      </header>
+
+      <section class="kpis">
+        <article class="kpi">
+          <span>Clientes vendidos</span>
+          <strong id="kpiSold">--</strong>
+        </article>
+
+        <article class="kpi">
+          <span>Produtos em campo</span>
+          <strong id="kpiAssets">--</strong>
+        </article>
+
+        <article class="kpi blue">
+          <span>Negócios abertos</span>
+          <strong id="kpiOpen">--</strong>
+        </article>
+
+        <article class="kpi warning">
+          <span>Revisões próximas</span>
+          <strong id="kpiSoon">--</strong>
+        </article>
+
+        <article class="kpi danger">
+          <span>Revisões vencidas</span>
+          <strong id="kpiLate">--</strong>
+        </article>
+      </section>
+
+      <section class="filters">
+        <label>
+          Visualização
+          <select id="filterView">
+            <option value="sold">Clientes vendidos</option>
+            <option value="open">Negócios abertos</option>
+            <option value="both">Ambos</option>
+          </select>
+        </label>
+
+        <label>
+          Produto
+          <select id="filterProduct">
+            <option value="">Todos</option>
+          </select>
+        </label>
+
+        <label>
+          Estado
+          <select id="filterState">
+            <option value="">Todos</option>
+          </select>
+        </label>
+
+        <label>
+          Responsável LLK
+          <select id="filterOwner">
+            <option value="">Todos</option>
+          </select>
+        </label>
+
+        <label>
+          Revisão / atividade
+          <select id="filterReview">
+            <option value="">Todos</option>
+          </select>
+        </label>
+
+        <label>
+          Situação campo
+          <select id="filterFieldStatus">
+            <option value="">Todas</option>
+          </select>
+        </label>
+
+        <label>
+          Etapa funil
+          <select id="filterStage">
+            <option value="">Todas</option>
+          </select>
+        </label>
+
+        <label class="wide">
+          Buscar
+          <input
+            id="filterSearch"
+            type="search"
+            placeholder="Cliente, cidade, produto, etapa, número de série..."
+          />
+        </label>
+      </section>
+
+      <section id="mapPage" class="page active">
+        <div class="map-layout">
+          <section class="card map-card">
+            <div class="card-header">
+              <div>
+                <h3>Mapa operacional</h3>
+                <p>
+                  Use as camadas no canto do mapa para alternar entre mapa e satélite.
+                </p>
+              </div>
+
+              <div class="legend">
+                <span><i class="dot green"></i> Vendido em dia</span>
+                <span><i class="dot yellow"></i> Próxima / atividade</span>
+                <span><i class="dot red"></i> Vencida / atrasada</span>
+                <span><i class="dot purple"></i> Aberto</span>
+              </div>
+            </div>
+
+            <div id="map"></div>
+          </section>
+
+          <aside class="card detail-card" id="detailCard">
+            <div class="empty">
+              <h3>Selecione um marcador</h3>
+              <p>
+                A ficha mostrará os dados comerciais, produto, revisão,
+                correia e links externos.
+              </p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="soldPage" class="page">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h3>Clientes vendidos</h3>
+              <p>Produtos em campo e revisões.</p>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Produto</th>
+                  <th>Telefone</th>
+                  <th>Cidade/UF</th>
+                  <th>Responsável</th>
+                  <th>Situação</th>
+                  <th>Correia</th>
+                  <th>Revisão</th>
+                  <th>Dias</th>
+                </tr>
+              </thead>
+
+              <tbody id="soldTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="openPage" class="page">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h3>Negócios abertos</h3>
+              <p>Oportunidades ainda não vendidas vindas do Pipedrive.</p>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Empresa</th>
+                  <th>Produto interesse</th>
+                  <th>Telefone</th>
+                  <th>Cidade/UF</th>
+                  <th>Responsável</th>
+                  <th>Etapa</th>
+                  <th>Probabilidade</th>
+                  <th>Valor</th>
+                  <th>Atividade</th>
+                </tr>
+              </thead>
+
+              <tbody id="openTable"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="eventsPage" class="page">
+        <section class="card">
+          <div class="card-header">
+            <div>
+              <h3>Histórico geral</h3>
+              <p>Eventos comerciais, engenharia e sincronizações.</p>
+            </div>
+          </div>
+
+          <div id="eventsList" class="events-list"></div>
+        </section>
+      </section>
     </main>
   </div>
-  <div class="drawer-backdrop hidden" id="drawerBackdrop"></div><aside class="drawer hidden" id="editDrawer"><div class="drawer-header"><div><h3>Atualizar produto em campo</h3><p id="drawerSubtitle">--</p></div><button id="closeDrawer" class="icon-btn">×</button></div><form id="updateForm" class="drawer-body"><input type="hidden" id="assetId" /><label>Situação em campo<select id="editSituation"><option>Em operacao</option><option>Aguardando instalacao</option><option>Revisao agendada</option><option>Revisao vencida</option><option>Em manutencao</option><option>Substituido</option><option>Inativo</option></select></label><label>Próxima revisão<input id="editNextReview" type="date" /></label><label>Responsável manutenção<input id="editMaintenanceOwner" type="text" placeholder="Ex.: Eng. Lucas" /></label><label>Observação<textarea id="editObservation" placeholder="Descreva revisão, defeito, avaria, status ou necessidade de contato..."></textarea></label><label>Foto/arquivo<input id="editFile" type="file" /></label><button class="primary" type="submit">Salvar atualização</button></form></aside>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="/static/app.js"></script>
+
+  <div class="drawer-backdrop hidden" id="drawerBackdrop"></div>
+
+  <aside class="drawer hidden" id="editDrawer">
+    <div class="drawer-header">
+      <div>
+        <h3>Atualizar produto em campo</h3>
+        <p id="drawerSubtitle">--</p>
+      </div>
+
+      <button id="closeDrawer" class="icon-btn">x</button>
+    </div>
+
+    <form id="updateForm" class="drawer-body">
+      <input type="hidden" id="assetId" />
+
+      <label>
+        Situação em campo
+        <select id="editSituation">
+          <option>Em operacao</option>
+          <option>Aguardando instalacao</option>
+          <option>Revisao agendada</option>
+          <option>Revisao vencida</option>
+          <option>Em manutencao</option>
+          <option>Substituido</option>
+          <option>Inativo</option>
+        </select>
+      </label>
+
+      <label>
+        Próxima revisão
+        <input id="editNextReview" type="date" />
+      </label>
+
+      <label>
+        Responsável manutenção
+        <input
+          id="editMaintenanceOwner"
+          type="text"
+          placeholder="Ex.: Eng. Lucas"
+        />
+      </label>
+
+      <label>
+        Observação
+        <textarea
+          id="editObservation"
+          placeholder="Descreva revisão, defeito, avaria ou necessidade de contato..."
+        ></textarea>
+      </label>
+
+      <label>
+        Foto / arquivo
+        <input id="editFile" type="file" />
+      </label>
+
+      <button class="primary" type="submit">Salvar atualização</button>
+    </form>
+  </aside>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>
