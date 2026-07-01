@@ -1,5 +1,3 @@
-import os
-import sqlite3
 import json
 import shutil
 from datetime import date, datetime, timedelta
@@ -7,35 +5,29 @@ from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
-load_dotenv()
-
-APP_NAME = os.getenv("APP_NAME", "LLK Field Platform")
-DATABASE_PATH = Path(os.getenv("DATABASE_PATH", "./data/llk_field_platform.db"))
-UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./app/uploads"))
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-
-DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+APP_NAME = "LLK Field Platform"
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title=APP_NAME)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -55,498 +47,449 @@ class EventCreate(BaseModel):
     responsavel: Optional[str] = None
 
 
-def db():
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def hoje():
+    return date.today()
 
 
-def dict_rows(rows):
-    return [dict(row) for row in rows]
-
-
-def now_text():
+def agora():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def review_status(next_review: Optional[str]):
-    if not next_review:
+def calcular_status_revisao(data_revisao: Optional[str]):
+    if not data_revisao:
         return 99999, "Sem data"
 
-    target = date.fromisoformat(next_review)
-    days = (target - date.today()).days
+    alvo = date.fromisoformat(data_revisao)
+    dias = (alvo - hoje()).days
 
-    if days < 0:
-        return days, "Vencida"
-    if days <= 30:
-        return days, "Proxima"
-    return days, "Em dia"
+    if dias < 0:
+        return dias, "Vencida"
+
+    if dias <= 30:
+        return dias, "Proxima"
+
+    return dias, "Em dia"
 
 
 async def broadcast(event: str, payload: dict | None = None):
-    dead_connections = []
-    message = {
+    mensagem = {
         "event": event,
         "payload": payload or {},
-        "time": now_text(),
+        "time": agora(),
     }
+
+    conexoes_mortas = []
 
     for ws in ws_connections:
         try:
-            await ws.send_json(message)
+            await ws.send_json(mensagem)
         except Exception:
-            dead_connections.append(ws)
+            conexoes_mortas.append(ws)
 
-    for ws in dead_connections:
+    for ws in conexoes_mortas:
         if ws in ws_connections:
             ws_connections.remove(ws)
 
 
-PRODUCTS = [
-    (1001, "RADEC LLK-100", "Radec", 365),
-    (1002, "RADEC LLK-300", "Radec", 365),
-    (1003, "RADEC Guard Pro", "Radec", 365),
-    (1004, "Sensor de Rasgo RS-20", "Sensor", 365),
-    (1005, "Painel de Monitoramento PM-900", "Painel", 365),
+PRODUTOS = [
+    "RADEC LLK-100",
+    "RADEC LLK-300",
+    "RADEC Guard Pro",
+    "Sensor de Rasgo RS-20",
+    "Painel de Monitoramento PM-900",
 ]
 
-
-CLIENTS = [
-    ("Alfa Mineracao", "11.111.111/0001-10", "Carlos Henrique", "(31) 99910-2200", "Av. Amazonas, 1200", "Belo Horizonte", "MG", -19.9167, -43.9345),
-    ("Beta Siderurgia", "22.222.222/0001-20", "Fernanda Duarte", "(11) 98822-4433", "Rua Funchal, 320", "Sao Paulo", "SP", -23.5505, -46.6333),
-    ("Gama Energia", "33.333.333/0001-30", "Rodrigo Alves", "(21) 97740-8811", "Av. Rio Branco, 45", "Rio de Janeiro", "RJ", -22.9068, -43.1729),
-    ("Delta Agritech", "44.444.444/0001-40", "Joao Meireles", "(62) 99660-2100", "Av. T-9, 880", "Goiania", "GO", -16.6869, -49.2648),
-    ("Epsilon Alimentos", "55.555.555/0001-50", "Renata Lopes", "(41) 98800-1199", "Rua XV de Novembro, 450", "Curitiba", "PR", -25.4284, -49.2733),
-    ("Zeta Celulose", "66.666.666/0001-60", "Patricia Nunes", "(71) 98850-3300", "Av. Tancredo Neves, 120", "Salvador", "BA", -12.9777, -38.5016),
-    ("Sigma Logistica", "77.777.777/0001-70", "Marcelo Vieira", "(51) 97788-4411", "Av. Borges de Medeiros, 880", "Porto Alegre", "RS", -30.0346, -51.2177),
-    ("Omega Quimica", "88.888.888/0001-80", "Luciana Ferraz", "(81) 99920-2221", "Av. Boa Viagem, 1000", "Recife", "PE", -8.0476, -34.8770),
-    ("Mineracao Serra Azul", "12.120.120/0001-12", "Andre Sales", "(31) 98450-1001", "Rodovia MG-050, km 60", "Itauna", "MG", -20.0753, -44.5764),
-    ("Vale Norte Operacoes", "13.130.130/0001-13", "Beatriz Paiva", "(94) 98120-4000", "Estrada Industrial, 450", "Parauapebas", "PA", -6.0675, -49.9023),
-    ("Carajas Processos", "14.140.140/0001-14", "Rafael Porto", "(94) 99211-5511", "Av. Liberdade, 240", "Maraba", "PA", -5.3686, -49.1178),
-    ("Nordeste Cimentos", "15.150.150/0001-15", "Camila Rocha", "(85) 98888-7711", "BR-116, km 18", "Fortaleza", "CE", -3.7319, -38.5267),
-    ("SulMetal Componentes", "16.160.160/0001-16", "Eduardo Ramos", "(47) 99930-9090", "Rua Industrial, 700", "Joinville", "SC", -26.3044, -48.8487),
-    ("Pantanal Fertilizantes", "17.170.170/0001-17", "Helena Martins", "(67) 99610-3030", "Av. Afonso Pena, 900", "Campo Grande", "MS", -20.4697, -54.6201),
-    ("Bahia Minerios", "18.180.180/0001-18", "Nicolas Freitas", "(77) 98844-2210", "Av. Minas Gerais, 150", "Caetite", "BA", -14.0696, -42.4755),
-    ("Amazonas Graos", "19.190.190/0001-19", "Paula Menezes", "(92) 99444-1212", "Av. Djalma Batista, 500", "Manaus", "AM", -3.1190, -60.0217),
-    ("Centro-Oeste Bioenergia", "20.200.200/0001-20", "Gustavo Nery", "(65) 99990-7000", "Av. CPA, 780", "Cuiaba", "MT", -15.6014, -56.0979),
-    ("Espirito Santo Portos", "21.210.210/0001-21", "Larissa Fontes", "(27) 98870-3020", "Av. Jeronimo Monteiro, 330", "Vitoria", "ES", -20.3155, -40.3128),
-    ("Parana Papel e Celulose", "23.230.230/0001-23", "Thiago Moura", "(42) 99111-8888", "Rua das Araucarias, 55", "Ponta Grossa", "PR", -25.0994, -50.1583),
-    ("Maranhao Graneis", "24.240.240/0001-24", "Isabela Prado", "(98) 98222-3030", "Av. dos Holandeses, 880", "Sao Luis", "MA", -2.5307, -44.3068),
-
-    # Negocios ainda nao vendidos
-    ("Prospecto Atlantico Cargas", "30.300.300/0001-30", "Marcio Neves", "(27) 99000-1000", "Porto de Tubarao", "Vitoria", "ES", -20.2900, -40.2500),
-    ("Prospecto Cerrado Mining", "31.310.310/0001-31", "Aline Ribeiro", "(62) 99111-9000", "Distrito Industrial", "Anapolis", "GO", -16.3285, -48.9534),
-    ("Prospecto Litoral Granitos", "32.320.320/0001-32", "Vitor Campos", "(73) 99222-1010", "Rodovia BA-001", "Ilheus", "BA", -14.7935, -39.0464),
-    ("Prospecto Norte Fertilizantes", "33.330.330/0001-33", "Monica Reis", "(91) 99333-2020", "Av. Augusto Montenegro", "Belem", "PA", -1.4558, -48.4902),
-    ("Prospecto Rio Aco", "34.340.340/0001-34", "Felipe Andrade", "(24) 99444-3030", "Distrito Metalurgico", "Volta Redonda", "RJ", -22.5231, -44.1040),
-    ("Prospecto Sul Graos", "35.350.350/0001-35", "Livia Torres", "(54) 99555-4040", "BR-285, km 120", "Passo Fundo", "RS", -28.2636, -52.4091),
-    ("Prospecto Nordeste Portos", "36.360.360/0001-36", "Henrique Maia", "(84) 99666-5050", "Av. Portuaria, 100", "Natal", "RN", -5.7793, -35.2009),
-    ("Prospecto Triangulo Bio", "37.370.370/0001-37", "Bianca Melo", "(34) 99777-6060", "Distrito Industrial", "Uberlandia", "MG", -18.9146, -48.2754),
+COMERCIAIS = [
+    "Mariana Costa",
+    "Bruno Lima",
+    "Ana Paula",
+    "Rafael Mendes",
+    "Diego Torres",
 ]
 
+ENGENHEIROS = [
+    "Eng. Lucas",
+    "Eng. Sofia",
+    "Eng. Mateus",
+    "Eng. Helena",
+]
 
-OPEN_STAGES = [
+ETAPAS_ABERTAS = [
     "Lead qualificado",
     "Diagnostico tecnico",
     "Proposta enviada",
     "Negociacao",
     "Follow-up atrasado",
 ]
-def init_db():
-    with db() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS clients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pipedrive_org_id INTEGER UNIQUE,
-                nome_empresa TEXT NOT NULL,
-                cnpj TEXT,
-                responsavel_empresa TEXT,
-                telefone TEXT,
-                endereco TEXT,
-                cidade TEXT,
-                estado TEXT,
-                pais TEXT DEFAULT 'Brasil',
-                latitude REAL,
-                longitude REAL,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
 
-            CREATE TABLE IF NOT EXISTS deals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pipedrive_deal_id INTEGER UNIQUE,
-                client_id INTEGER NOT NULL,
-                titulo TEXT,
-                status_negocio TEXT,
-                etapa_funil TEXT,
-                produto_interesse TEXT,
-                probabilidade INTEGER DEFAULT 0,
-                valor REAL,
-                moeda TEXT DEFAULT 'BRL',
-                responsavel_llk TEXT,
-                data_ganho TEXT,
-                previsao_fechamento TEXT,
-                proxima_atividade TEXT,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
+CLIENTES_VENDIDOS = [
+    ("Alfa Mineracao", "Carlos Henrique", "(31) 99910-2200", "Av. Amazonas, 1200", "Belo Horizonte", "MG", -19.9167, -43.9345),
+    ("Beta Siderurgia", "Fernanda Duarte", "(11) 98822-4433", "Rua Funchal, 320", "Sao Paulo", "SP", -23.5505, -46.6333),
+    ("Gama Energia", "Rodrigo Alves", "(21) 97740-8811", "Av. Rio Branco, 45", "Rio de Janeiro", "RJ", -22.9068, -43.1729),
+    ("Delta Agritech", "Joao Meireles", "(62) 99660-2100", "Av. T-9, 880", "Goiania", "GO", -16.6869, -49.2648),
+    ("Epsilon Alimentos", "Renata Lopes", "(41) 98800-1199", "Rua XV de Novembro, 450", "Curitiba", "PR", -25.4284, -49.2733),
+    ("Zeta Celulose", "Patricia Nunes", "(71) 98850-3300", "Av. Tancredo Neves, 120", "Salvador", "BA", -12.9777, -38.5016),
+    ("Sigma Logistica", "Marcelo Vieira", "(51) 97788-4411", "Av. Borges de Medeiros, 880", "Porto Alegre", "RS", -30.0346, -51.2177),
+    ("Omega Quimica", "Luciana Ferraz", "(81) 99920-2221", "Av. Boa Viagem, 1000", "Recife", "PE", -8.0476, -34.8770),
+    ("Mineracao Serra Azul", "Andre Sales", "(31) 98450-1001", "Rodovia MG-050, km 60", "Itauna", "MG", -20.0753, -44.5764),
+    ("Vale Norte Operacoes", "Beatriz Paiva", "(94) 98120-4000", "Estrada Industrial, 450", "Parauapebas", "PA", -6.0675, -49.9023),
+    ("Carajas Processos", "Rafael Porto", "(94) 99211-5511", "Av. Liberdade, 240", "Maraba", "PA", -5.3686, -49.1178),
+    ("Nordeste Cimentos", "Camila Rocha", "(85) 98888-7711", "BR-116, km 18", "Fortaleza", "CE", -3.7319, -38.5267),
+    ("SulMetal Componentes", "Eduardo Ramos", "(47) 99930-9090", "Rua Industrial, 700", "Joinville", "SC", -26.3044, -48.8487),
+    ("Pantanal Fertilizantes", "Helena Martins", "(67) 99610-3030", "Av. Afonso Pena, 900", "Campo Grande", "MS", -20.4697, -54.6201),
+    ("Bahia Minerios", "Nicolas Freitas", "(77) 98844-2210", "Av. Minas Gerais, 150", "Caetite", "BA", -14.0696, -42.4755),
+    ("Amazonas Graos", "Paula Menezes", "(92) 99444-1212", "Av. Djalma Batista, 500", "Manaus", "AM", -3.1190, -60.0217),
+    ("Centro-Oeste Bioenergia", "Gustavo Nery", "(65) 99990-7000", "Av. CPA, 780", "Cuiaba", "MT", -15.6014, -56.0979),
+    ("Espirito Santo Portos", "Larissa Fontes", "(27) 98870-3020", "Av. Jeronimo Monteiro, 330", "Vitoria", "ES", -20.3155, -40.3128),
+    ("Parana Papel e Celulose", "Thiago Moura", "(42) 99111-8888", "Rua das Araucarias, 55", "Ponta Grossa", "PR", -25.0994, -50.1583),
+    ("Maranhao Graneis", "Isabela Prado", "(98) 98222-3030", "Av. dos Holandeses, 880", "Sao Luis", "MA", -2.5307, -44.3068),
+]
 
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                pipedrive_product_id INTEGER UNIQUE,
-                nome_produto TEXT NOT NULL,
-                categoria TEXT,
-                tempo_revisao_dias INTEGER DEFAULT 365,
-                ativo INTEGER DEFAULT 1
-            );
+NEGOCIOS_ABERTOS = [
+    ("Prospecto Atlantico Cargas", "Marcio Neves", "(27) 99000-1000", "Porto de Tubarao", "Vitoria", "ES", -20.2900, -40.2500),
+    ("Prospecto Cerrado Mining", "Aline Ribeiro", "(62) 99111-9000", "Distrito Industrial", "Anapolis", "GO", -16.3285, -48.9534),
+    ("Prospecto Litoral Granitos", "Vitor Campos", "(73) 99222-1010", "Rodovia BA-001", "Ilheus", "BA", -14.7935, -39.0464),
+    ("Prospecto Norte Fertilizantes", "Monica Reis", "(91) 99333-2020", "Av. Augusto Montenegro", "Belem", "PA", -1.4558, -48.4902),
+    ("Prospecto Rio Aco", "Felipe Andrade", "(24) 99444-3030", "Distrito Metalurgico", "Volta Redonda", "RJ", -22.5231, -44.1040),
+    ("Prospecto Sul Graos", "Livia Torres", "(54) 99555-4040", "BR-285, km 120", "Passo Fundo", "RS", -28.2636, -52.4091),
+    ("Prospecto Nordeste Portos", "Henrique Maia", "(84) 99666-5050", "Av. Portuaria, 100", "Natal", "RN", -5.7793, -35.2009),
+    ("Prospecto Triangulo Bio", "Bianca Melo", "(34) 99777-6060", "Distrito Industrial", "Uberlandia", "MG", -18.9146, -48.2754),
+]
 
-            CREATE TABLE IF NOT EXISTS field_assets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                client_id INTEGER NOT NULL,
-                deal_id INTEGER NOT NULL,
-                product_id INTEGER NOT NULL,
-                numero_serie TEXT,
-                data_venda TEXT,
-                data_instalacao TEXT,
-                data_proxima_revisao TEXT,
-                situacao_campo TEXT,
-                responsavel_comercial TEXT,
-                responsavel_manutencao TEXT,
-                posicao_correia TEXT,
-                criticidade TEXT,
-                observacao TEXT,
-                ativo INTEGER DEFAULT 1,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS maintenance_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                asset_id INTEGER,
-                deal_id INTEGER,
-                tipo_evento TEXT NOT NULL,
-                descricao TEXT,
-                responsavel TEXT,
-                origem TEXT DEFAULT 'Plataforma',
-                data_evento TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS attachments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                asset_id INTEGER NOT NULL,
-                nome_arquivo TEXT NOT NULL,
-                caminho_arquivo TEXT NOT NULL,
-                tipo_arquivo TEXT,
-                uploaded_at TEXT DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-        )
-
-        existing = conn.execute("SELECT COUNT(*) AS n FROM clients").fetchone()["n"]
-
-        if existing == 0:
-            seed_database(conn)
+POINTS = []
+EVENTS = []
+def valor_venda(index):
+    return 38000 + index * 9300
 
 
-def seed_database(conn: sqlite3.Connection):
-    for pipedrive_product_id, product_name, category, review_days in PRODUCTS:
-        conn.execute(
-            """
-            INSERT INTO products (
-                pipedrive_product_id,
-                nome_produto,
-                categoria,
-                tempo_revisao_dias
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (pipedrive_product_id, product_name, category, review_days),
-        )
+def proximo_evento_id():
+    return len(EVENTS) + 1
 
-    comerciais = [
-        "Mariana Costa",
-        "Bruno Lima",
-        "Ana Paula",
-        "Rafael Mendes",
-        "Diego Torres",
-    ]
 
-    engenheiros = [
-        "Eng. Lucas",
-        "Eng. Sofia",
-        "Eng. Mateus",
-        "Eng. Helena",
-    ]
+def registrar_evento(asset_id, open_deal_id, tipo_evento, descricao, responsavel, origem):
+    EVENTS.append(
+        {
+            "id": proximo_evento_id(),
+            "asset_id": asset_id,
+            "deal_id": open_deal_id,
+            "tipo_evento": tipo_evento,
+            "descricao": descricao,
+            "responsavel": responsavel,
+            "origem": origem,
+            "data_evento": agora(),
+            "nome_empresa": "Sistema",
+            "nome_produto": "",
+        }
+    )
 
-    situacoes = [
-        "Em operacao",
-        "Revisao agendada",
-        "Em manutencao",
-        "Aguardando instalacao",
-        "Em operacao",
-    ]
 
-    criticidades = [
-        "Baixa",
-        "Media",
-        "Alta",
-        "Media",
-        "Baixa",
-    ]
+def atualizar_dados_dos_eventos():
+    for event in EVENTS:
+        event["nome_empresa"] = "Sistema"
+        event["nome_produto"] = ""
 
-    for i, client in enumerate(CLIENTS, start=1):
-        org_id = 5000 + i
+        for point in POINTS:
+            if event["asset_id"] and point["asset_id"] == event["asset_id"]:
+                event["nome_empresa"] = point["nome_empresa"]
+                event["nome_produto"] = point["nome_produto"]
 
-        conn.execute(
-            """
-            INSERT INTO clients (
-                pipedrive_org_id,
-                nome_empresa,
-                cnpj,
-                responsavel_empresa,
-                telefone,
-                endereco,
-                cidade,
-                estado,
-                pais,
-                latitude,
-                longitude
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Brasil', ?, ?)
-            """,
-            (org_id, *client),
-        )
+            if event["deal_id"] and point["open_deal_id"] == event["deal_id"]:
+                event["nome_empresa"] = point["nome_empresa"]
+                event["nome_produto"] = point["nome_produto"]
 
-        client_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
 
-        product_row = conn.execute(
-            """
-            SELECT *
-            FROM products
-            WHERE pipedrive_product_id = ?
-            """,
-            (PRODUCTS[(i - 1) % len(PRODUCTS)][0],),
-        ).fetchone()
+def criar_dados_iniciais():
+    POINTS.clear()
+    EVENTS.clear()
 
-        comercial = comerciais[i % len(comerciais)]
-        engenheiro = engenheiros[i % len(engenheiros)]
+    clientes_com_revisao_vencida = {3, 7, 11, 15}
+    clientes_com_revisao_proxima = {2, 6, 8, 14, 20}
 
-        # Primeiros 20 clientes: negócios ganhos + produtos em campo
-        if i <= 20:
-            won_date = date.today() - timedelta(days=35 + i * 13)
-            install_date = won_date + timedelta(days=10 + i % 9)
-            next_review = install_date + timedelta(days=365)
+    for index, cliente in enumerate(CLIENTES_VENDIDOS, start=1):
+        nome, responsavel_empresa, telefone, endereco, cidade, estado, latitude, longitude = cliente
 
-            # Força alguns casos vencidos e próximos para demonstrar mapa/filtros
-            if i in [3, 7, 11, 15]:
-                next_review = date.today() - timedelta(days=5 + i)
-            elif i in [2, 6, 8, 14, 20]:
-                next_review = date.today() + timedelta(days=5 + i)
+        produto = PRODUTOS[(index - 1) % len(PRODUTOS)]
+        comercial = COMERCIAIS[index % len(COMERCIAIS)]
+        engenheiro = ENGENHEIROS[index % len(ENGENHEIROS)]
 
-            conn.execute(
-                """
-                INSERT INTO deals (
-                    pipedrive_deal_id,
-                    client_id,
-                    titulo,
-                    status_negocio,
-                    etapa_funil,
-                    produto_interesse,
-                    probabilidade,
-                    valor,
-                    moeda,
-                    responsavel_llk,
-                    data_ganho,
-                    previsao_fechamento,
-                    proxima_atividade
-                )
-                VALUES (?, ?, ?, 'Ganho', 'Ganho', ?, 100, ?, 'BRL', ?, ?, NULL, NULL)
-                """,
-                (
-                    9000 + i,
-                    client_id,
-                    f"Venda {product_row['nome_produto']} - {client[0]}",
-                    product_row["nome_produto"],
-                    38000 + i * 9300,
-                    comercial,
-                    won_date.isoformat(),
-                ),
-            )
+        data_venda = hoje() - timedelta(days=40 + index * 13)
+        data_instalacao = data_venda + timedelta(days=10)
 
-            deal_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-
-            situacao = situacoes[i % len(situacoes)]
-
-            if i in [3, 7, 11, 15]:
-                situacao = "Revisao vencida"
-            elif i in [2, 6, 8, 14, 20]:
-                situacao = "Revisao agendada"
-
-            posicao_correia = (
-                f"Correia CT-{(i % 6) + 1:02d} | "
-                f"{'lado carga' if i % 2 == 0 else 'lado retorno'} | "
-                f"{80 + i * 6} m"
-            )
-
-            conn.execute(
-                """
-                INSERT INTO field_assets (
-                    client_id,
-                    deal_id,
-                    product_id,
-                    numero_serie,
-                    data_venda,
-                    data_instalacao,
-                    data_proxima_revisao,
-                    situacao_campo,
-                    responsavel_comercial,
-                    responsavel_manutencao,
-                    posicao_correia,
-                    criticidade,
-                    observacao
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    client_id,
-                    deal_id,
-                    product_row["id"],
-                    f"LLK-{date.today().year}-{i:04d}",
-                    won_date.isoformat(),
-                    install_date.isoformat(),
-                    next_review.isoformat(),
-                    situacao,
-                    comercial,
-                    engenheiro,
-                    posicao_correia,
-                    criticidades[i % len(criticidades)],
-                    "Registro ficticio para demonstracao da plataforma.",
-                ),
-            )
-
-            asset_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-
-            events = [
-                (
-                    "Venda importada",
-                    f"Negocio ganho no Pipedrive e {product_row['nome_produto']} criado como produto em campo.",
-                    comercial,
-                    "Pipedrive",
-                ),
-                (
-                    "Instalacao",
-                    f"Equipamento instalado em {posicao_correia}.",
-                    engenheiro,
-                    "Engenharia",
-                ),
-                (
-                    "Inspecao visual",
-                    "Inspecao inicial sem avarias criticas.",
-                    engenheiro,
-                    "Plataforma",
-                ),
-            ]
-
-            if i in [3, 7, 11, 15]:
-                events.append(
-                    (
-                        "Alerta de revisao",
-                        "Revisao vencida. Cliente deve ser priorizado.",
-                        "Sistema",
-                        "Plataforma",
-                    )
-                )
-            elif i in [2, 6, 8, 14, 20]:
-                events.append(
-                    (
-                        "Revisao agendada",
-                        "Revisao dentro dos proximos 30 dias.",
-                        engenheiro,
-                        "Plataforma",
-                    )
-                )
-
-            for tipo, desc, resp, origem in events:
-                conn.execute(
-                    """
-                    INSERT INTO maintenance_events (
-                        asset_id,
-                        deal_id,
-                        tipo_evento,
-                        descricao,
-                        responsavel,
-                        origem
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (asset_id, deal_id, tipo, desc, resp, origem),
-                )
-
-        # Demais clientes: negócios abertos / ainda não vendidos
+        if index in clientes_com_revisao_vencida:
+            data_proxima_revisao = hoje() - timedelta(days=3 + index)
+            situacao_campo = "Revisao vencida"
+        elif index in clientes_com_revisao_proxima:
+            data_proxima_revisao = hoje() + timedelta(days=5 + index)
+            situacao_campo = "Revisao agendada"
         else:
-            stage = OPEN_STAGES[(i - 21) % len(OPEN_STAGES)]
-            probability = [20, 35, 55, 70, 15][(i - 21) % len(OPEN_STAGES)]
-            forecast = date.today() + timedelta(days=15 + (i - 20) * 11)
-            next_activity = date.today() + timedelta(days=(i - 21) % 6 - 2)
+            data_proxima_revisao = data_instalacao + timedelta(days=365)
+            situacao_campo = "Em operacao"
 
-            conn.execute(
-                """
-                INSERT INTO deals (
-                    pipedrive_deal_id,
-                    client_id,
-                    titulo,
-                    status_negocio,
-                    etapa_funil,
-                    produto_interesse,
-                    probabilidade,
-                    valor,
-                    moeda,
-                    responsavel_llk,
-                    data_ganho,
-                    previsao_fechamento,
-                    proxima_atividade
-                )
-                VALUES (?, ?, ?, 'Aberto', ?, ?, ?, ?, 'BRL', ?, NULL, ?, ?)
-                """,
-                (
-                    9000 + i,
-                    client_id,
-                    f"Oportunidade {product_row['nome_produto']} - {client[0]}",
-                    stage,
-                    product_row["nome_produto"],
-                    probability,
-                    45000 + (i - 20) * 18000,
-                    comercial,
-                    forecast.isoformat(),
-                    next_activity.isoformat(),
-                ),
+        dias, status = calcular_status_revisao(data_proxima_revisao.isoformat())
+
+        ponto = {
+            "point_type": "sold",
+            "asset_id": index,
+            "open_deal_id": None,
+            "client_id": index,
+            "nome_empresa": nome,
+            "cnpj": f"{index:02d}.{index:03d}.{index:03d}/0001-{index:02d}",
+            "responsavel_empresa": responsavel_empresa,
+            "telefone": telefone,
+            "endereco": endereco,
+            "cidade": cidade,
+            "estado": estado,
+            "pais": "Brasil",
+            "latitude": latitude,
+            "longitude": longitude,
+            "pipedrive_deal_id": 9000 + index,
+            "titulo_negocio": f"Venda {produto} - {nome}",
+            "status_negocio": "Ganho",
+            "etapa_funil": "Ganho",
+            "produto_interesse": produto,
+            "probabilidade": 100,
+            "previsao_fechamento": None,
+            "proxima_atividade": None,
+            "valor": valor_venda(index),
+            "moeda": "BRL",
+            "data_ganho": data_venda.isoformat(),
+            "nome_produto": produto,
+            "categoria": "Produto LLK",
+            "numero_serie": f"LLK-{hoje().year}-{index:04d}",
+            "data_venda": data_venda.isoformat(),
+            "data_instalacao": data_instalacao.isoformat(),
+            "data_proxima_revisao": data_proxima_revisao.isoformat(),
+            "situacao_campo": situacao_campo,
+            "responsavel_comercial": comercial,
+            "responsavel_manutencao": engenheiro,
+            "posicao_correia": (
+                f"Correia CT-{(index % 6) + 1:02d} | "
+                f"{'lado carga' if index % 2 == 0 else 'lado retorno'} | "
+                f"{80 + index * 6} m"
+            ),
+            "criticidade": "Alta" if index in clientes_com_revisao_vencida else "Media",
+            "observacao": "Registro ficticio para demonstracao da plataforma.",
+            "updated_at": agora(),
+            "dias_restantes_revisao": dias,
+            "status_revisao": status,
+        }
+
+        POINTS.append(ponto)
+
+        registrar_evento(
+            asset_id=index,
+            open_deal_id=None,
+            tipo_evento="Venda importada",
+            descricao=f"Negocio ganho no Pipedrive e {produto} criado como produto em campo.",
+            responsavel=comercial,
+            origem="Pipedrive",
+        )
+
+        registrar_evento(
+            asset_id=index,
+            open_deal_id=None,
+            tipo_evento="Instalacao",
+            descricao=f"Equipamento instalado em {ponto['posicao_correia']}.",
+            responsavel=engenheiro,
+            origem="Engenharia",
+        )
+
+        if index in clientes_com_revisao_vencida:
+            registrar_evento(
+                asset_id=index,
+                open_deal_id=None,
+                tipo_evento="Alerta de revisao",
+                descricao="Revisao vencida. Cliente deve ser priorizado.",
+                responsavel="Sistema",
+                origem="Plataforma",
             )
 
-            deal_id = conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    for offset, negocio in enumerate(NEGOCIOS_ABERTOS, start=1):
+        index = 20 + offset
+        nome, responsavel_empresa, telefone, endereco, cidade, estado, latitude, longitude = negocio
 
-            conn.execute(
-                """
-                INSERT INTO maintenance_events (
-                    asset_id,
-                    deal_id,
-                    tipo_evento,
-                    descricao,
-                    responsavel,
-                    origem
-                )
-                VALUES (NULL, ?, ?, ?, ?, ?)
-                """,
-                (
-                    deal_id,
-                    "Oportunidade importada",
-                    f"Negocio aberto em etapa {stage}.",
-                    comercial,
-                    "Pipedrive",
-                ),
-            )
-            @app.on_event("startup")
-def on_startup():
-    init_db()
+        produto = PRODUTOS[(index - 1) % len(PRODUTOS)]
+        comercial = COMERCIAIS[index % len(COMERCIAIS)]
+        etapa = ETAPAS_ABERTAS[(offset - 1) % len(ETAPAS_ABERTAS)]
+
+        probabilidades = [20, 35, 55, 70, 15, 45, 60, 80]
+        probabilidade = probabilidades[offset - 1]
+
+        previsao_fechamento = hoje() + timedelta(days=15 + offset * 9)
+        proxima_atividade = hoje() + timedelta(days=(offset % 6) - 2)
+
+        dias_atividade = (proxima_atividade - hoje()).days
+
+        if dias_atividade < 0:
+            status_atividade = "Atividade atrasada"
+        else:
+            status_atividade = "Em acompanhamento"
+
+        ponto = {
+            "point_type": "open",
+            "asset_id": None,
+            "open_deal_id": index,
+            "client_id": index,
+            "nome_empresa": nome,
+            "cnpj": f"{index:02d}.{index:03d}.{index:03d}/0001-{index:02d}",
+            "responsavel_empresa": responsavel_empresa,
+            "telefone": telefone,
+            "endereco": endereco,
+            "cidade": cidade,
+            "estado": estado,
+            "pais": "Brasil",
+            "latitude": latitude,
+            "longitude": longitude,
+            "pipedrive_deal_id": 9000 + index,
+            "titulo_negocio": f"Oportunidade {produto} - {nome}",
+            "status_negocio": "Aberto",
+            "etapa_funil": etapa,
+            "produto_interesse": produto,
+            "probabilidade": probabilidade,
+            "previsao_fechamento": previsao_fechamento.isoformat(),
+            "proxima_atividade": proxima_atividade.isoformat(),
+            "valor": 45000 + offset * 18000,
+            "moeda": "BRL",
+            "data_ganho": None,
+            "nome_produto": produto,
+            "categoria": "Em negociacao",
+            "numero_serie": None,
+            "data_venda": None,
+            "data_instalacao": None,
+            "data_proxima_revisao": None,
+            "situacao_campo": "Negocio aberto",
+            "responsavel_comercial": comercial,
+            "responsavel_manutencao": None,
+            "posicao_correia": None,
+            "criticidade": "Alta" if probabilidade >= 70 else "Media",
+            "observacao": "Oportunidade comercial ainda nao vendida.",
+            "updated_at": agora(),
+            "dias_restantes_revisao": dias_atividade,
+            "status_revisao": status_atividade,
+        }
+
+        POINTS.append(ponto)
+
+        registrar_evento(
+            asset_id=None,
+            open_deal_id=index,
+            tipo_evento="Oportunidade importada",
+            descricao=f"Negocio aberto em etapa {etapa}.",
+            responsavel=comercial,
+            origem="Pipedrive",
+        )
+
+    atualizar_dados_dos_eventos()
 
 
+def atualizar_status_dos_pontos():
+    for point in POINTS:
+        if point["point_type"] == "sold":
+            dias, status = calcular_status_revisao(point["data_proxima_revisao"])
+            point["dias_restantes_revisao"] = dias
+            point["status_revisao"] = status
+        else:
+            if point["proxima_atividade"]:
+                data_atividade = date.fromisoformat(point["proxima_atividade"])
+                dias = (data_atividade - hoje()).days
+            else:
+                dias = 99999
+
+            point["dias_restantes_revisao"] = dias
+
+            if dias < 0:
+                point["status_revisao"] = "Atividade atrasada"
+            else:
+                point["status_revisao"] = "Em acompanhamento"
+
+
+def aplicar_filtros(
+    pontos,
+    produto="",
+    estado="",
+    responsavel="",
+    status_revisao="",
+    situacao="",
+    etapa="",
+    q="",
+):
+    atualizar_status_dos_pontos()
+
+    resultado = []
+
+    for point in pontos:
+        if produto and point["nome_produto"] != produto:
+            continue
+
+        if estado and point["estado"] != estado:
+            continue
+
+        if responsavel and point["responsavel_comercial"] != responsavel:
+            continue
+
+        if status_revisao and point["status_revisao"] != status_revisao:
+            continue
+
+        if situacao and point["situacao_campo"] != situacao:
+            continue
+
+        if etapa and point["etapa_funil"] != etapa:
+            continue
+
+        if q:
+            texto = " ".join(
+                str(point.get(key) or "")
+                for key in [
+                    "nome_empresa",
+                    "cidade",
+                    "estado",
+                    "nome_produto",
+                    "produto_interesse",
+                    "responsavel_empresa",
+                    "numero_serie",
+                    "etapa_funil",
+                    "responsavel_comercial",
+                ]
+            ).lower()
+
+            if q.lower() not in texto:
+                continue
+
+        resultado.append(point)
+
+    return resultado
+
+
+def carregar_pontos(
+    view="sold",
+    produto="",
+    estado="",
+    responsavel="",
+    status_revisao="",
+    situacao="",
+    etapa="",
+    q="",
+):
+    if view == "sold":
+        pontos = [point for point in POINTS if point["point_type"] == "sold"]
+    elif view == "open":
+        pontos = [point for point in POINTS if point["point_type"] == "open"]
+    else:
+        pontos = POINTS[:]
+
+    return aplicar_filtros(
+        pontos=pontos,
+        produto=produto,
+        estado=estado,
+        responsavel=responsavel,
+        status_revisao=status_revisao,
+        situacao=situacao,
+        etapa=etapa,
+        q=q,
+    )
+
+
+criar_dados_iniciais()
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -565,307 +508,53 @@ async def websocket_endpoint(ws: WebSocket):
             ws_connections.remove(ws)
 
 
-def base_assets_query():
-    return """
-    SELECT
-        'sold' AS point_type,
-        fa.id AS asset_id,
-        NULL AS open_deal_id,
-        c.id AS client_id,
-        c.nome_empresa,
-        c.cnpj,
-        c.responsavel_empresa,
-        c.telefone,
-        c.endereco,
-        c.cidade,
-        c.estado,
-        c.pais,
-        c.latitude,
-        c.longitude,
-        d.pipedrive_deal_id,
-        d.titulo AS titulo_negocio,
-        d.status_negocio,
-        d.etapa_funil,
-        d.produto_interesse,
-        d.probabilidade,
-        d.previsao_fechamento,
-        d.proxima_atividade,
-        d.valor,
-        d.moeda,
-        d.data_ganho,
-        p.nome_produto,
-        p.categoria,
-        fa.numero_serie,
-        fa.data_venda,
-        fa.data_instalacao,
-        fa.data_proxima_revisao,
-        fa.situacao_campo,
-        fa.responsavel_comercial,
-        fa.responsavel_manutencao,
-        fa.posicao_correia,
-        fa.criticidade,
-        fa.observacao,
-        fa.updated_at
-    FROM field_assets fa
-    JOIN clients c ON c.id = fa.client_id
-    JOIN deals d ON d.id = fa.deal_id
-    JOIN products p ON p.id = fa.product_id
-    WHERE fa.ativo = 1
-    """
-
-
-def base_open_deals_query():
-    return """
-    SELECT
-        'open' AS point_type,
-        NULL AS asset_id,
-        d.id AS open_deal_id,
-        c.id AS client_id,
-        c.nome_empresa,
-        c.cnpj,
-        c.responsavel_empresa,
-        c.telefone,
-        c.endereco,
-        c.cidade,
-        c.estado,
-        c.pais,
-        c.latitude,
-        c.longitude,
-        d.pipedrive_deal_id,
-        d.titulo AS titulo_negocio,
-        d.status_negocio,
-        d.etapa_funil,
-        d.produto_interesse,
-        d.probabilidade,
-        d.previsao_fechamento,
-        d.proxima_atividade,
-        d.valor,
-        d.moeda,
-        d.data_ganho,
-        d.produto_interesse AS nome_produto,
-        'Em negociacao' AS categoria,
-        NULL AS numero_serie,
-        NULL AS data_venda,
-        NULL AS data_instalacao,
-        NULL AS data_proxima_revisao,
-        'Negocio aberto' AS situacao_campo,
-        d.responsavel_llk AS responsavel_comercial,
-        NULL AS responsavel_manutencao,
-        NULL AS posicao_correia,
-        CASE
-            WHEN d.probabilidade >= 70 THEN 'Alta'
-            WHEN d.probabilidade >= 40 THEN 'Media'
-            ELSE 'Baixa'
-        END AS criticidade,
-        'Oportunidade comercial ainda nao vendida.' AS observacao,
-        d.updated_at
-    FROM deals d
-    JOIN clients c ON c.id = d.client_id
-    WHERE d.status_negocio = 'Aberto'
-    """
-
-
-def enrich_point(row):
-    if row["point_type"] == "sold":
-        days, status = review_status(row["data_proxima_revisao"])
-    else:
-        if row["proxima_atividade"]:
-            activity_date = date.fromisoformat(row["proxima_atividade"])
-            days = (activity_date - date.today()).days
-        else:
-            days = 99999
-
-        status = "Atividade atrasada" if days < 0 else "Em acompanhamento"
-
-    row["dias_restantes_revisao"] = days
-    row["status_revisao"] = status
-
-    return row
-
-
-def apply_filters(
-    rows,
-    produto="",
-    estado="",
-    responsavel="",
-    status_revisao="",
-    situacao="",
-    etapa="",
-    q="",
-):
-    result = []
-
-    for row in rows:
-        row = enrich_point(row)
-
-        if produto and row.get("nome_produto") != produto and row.get("produto_interesse") != produto:
-            continue
-
-        if estado and row["estado"] != estado:
-            continue
-
-        if responsavel and row["responsavel_comercial"] != responsavel:
-            continue
-
-        if status_revisao and row["status_revisao"] != status_revisao:
-            continue
-
-        if situacao and row["situacao_campo"] != situacao:
-            continue
-
-        if etapa and row["etapa_funil"] != etapa:
-            continue
-
-        if q:
-            searchable = " ".join(
-                str(row.get(key) or "")
-                for key in [
-                    "nome_empresa",
-                    "cidade",
-                    "estado",
-                    "nome_produto",
-                    "produto_interesse",
-                    "responsavel_empresa",
-                    "numero_serie",
-                    "etapa_funil",
-                    "responsavel_comercial",
-                ]
-            ).lower()
-
-            if q.lower() not in searchable:
-                continue
-
-        result.append(row)
-
-    return result
-
-
-def load_points(
-    view="sold",
-    produto="",
-    estado="",
-    responsavel="",
-    status_revisao="",
-    situacao="",
-    etapa="",
-    q="",
-):
-    rows = []
-
-    with db() as conn:
-        if view in ["sold", "both"]:
-            rows += dict_rows(
-                conn.execute(
-                    base_assets_query() + " ORDER BY c.nome_empresa ASC"
-                ).fetchall()
-            )
-
-        if view in ["open", "both"]:
-            rows += dict_rows(
-                conn.execute(
-                    base_open_deals_query() + " ORDER BY c.nome_empresa ASC"
-                ).fetchall()
-            )
-
-    return apply_filters(
-        rows,
-        produto=produto,
-        estado=estado,
-        responsavel=responsavel,
-        status_revisao=status_revisao,
-        situacao=situacao,
-        etapa=etapa,
-        q=q,
-    )
-
-
 @app.get("/api/summary")
 def summary():
-    sold = load_points("sold")
-    open_deals = load_points("open")
-    statuses = [row["status_revisao"] for row in sold]
+    atualizar_status_dos_pontos()
+
+    vendidos = [point for point in POINTS if point["point_type"] == "sold"]
+    abertos = [point for point in POINTS if point["point_type"] == "open"]
+
+    status_vendidos = [point["status_revisao"] for point in vendidos]
 
     return {
-        "clientes_vendidos": len(set(row["nome_empresa"] for row in sold)),
-        "produtos_em_campo": len(sold),
-        "negocios_abertos": len(open_deals),
-        "valor_aberto": sum(float(row["valor"] or 0) for row in open_deals),
-        "revisoes_vencidas": statuses.count("Vencida"),
-        "revisoes_proximas": statuses.count("Proxima"),
-        "estados_atendidos": len(set(row["estado"] for row in sold + open_deals)),
-        "ultima_sincronizacao": now_text(),
+        "clientes_vendidos": len(set(point["nome_empresa"] for point in vendidos)),
+        "produtos_em_campo": len(vendidos),
+        "negocios_abertos": len(abertos),
+        "valor_aberto": sum(float(point["valor"] or 0) for point in abertos),
+        "revisoes_vencidas": status_vendidos.count("Vencida"),
+        "revisoes_proximas": status_vendidos.count("Proxima"),
+        "estados_atendidos": len(set(point["estado"] for point in POINTS)),
+        "ultima_sincronizacao": agora(),
     }
 
 
 @app.get("/api/options")
 def options():
-    with db() as conn:
-        products = [
-            row["nome"]
-            for row in conn.execute(
-                """
-                SELECT nome_produto AS nome
-                FROM products
-                UNION
-                SELECT produto_interesse AS nome
-                FROM deals
-                WHERE produto_interesse IS NOT NULL
-                ORDER BY nome
-                """
-            ).fetchall()
-        ]
+    atualizar_status_dos_pontos()
 
-        estados = [
-            row["estado"]
-            for row in conn.execute(
-                """
-                SELECT DISTINCT estado
-                FROM clients
-                ORDER BY estado
-                """
-            ).fetchall()
-        ]
+    produtos = sorted(set(point["nome_produto"] for point in POINTS))
+    estados = sorted(set(point["estado"] for point in POINTS))
+    responsaveis = sorted(set(point["responsavel_comercial"] for point in POINTS))
 
-        responsaveis = [
-            row["responsavel"]
-            for row in conn.execute(
-                """
-                SELECT DISTINCT responsavel_comercial AS responsavel
-                FROM field_assets
-                UNION
-                SELECT DISTINCT responsavel_llk AS responsavel
-                FROM deals
-                ORDER BY responsavel
-                """
-            ).fetchall()
-            if row["responsavel"]
-        ]
+    situacoes = sorted(
+        set(
+            point["situacao_campo"]
+            for point in POINTS
+            if point["point_type"] == "sold"
+        )
+    )
 
-        situacoes = [
-            row["situacao_campo"]
-            for row in conn.execute(
-                """
-                SELECT DISTINCT situacao_campo
-                FROM field_assets
-                ORDER BY situacao_campo
-                """
-            ).fetchall()
-        ]
-
-        etapas = [
-            row["etapa_funil"]
-            for row in conn.execute(
-                """
-                SELECT DISTINCT etapa_funil
-                FROM deals
-                WHERE status_negocio = 'Aberto'
-                ORDER BY etapa_funil
-                """
-            ).fetchall()
-        ]
+    etapas = sorted(
+        set(
+            point["etapa_funil"]
+            for point in POINTS
+            if point["point_type"] == "open"
+        )
+    )
 
     return {
-        "produtos": products,
+        "produtos": produtos,
         "estados": estados,
         "responsaveis": responsaveis,
         "situacoes": situacoes,
@@ -891,7 +580,7 @@ def map_points(
     etapa: str = "",
     q: str = "",
 ):
-    return load_points(
+    return carregar_pontos(
         view=view,
         produto=produto,
         estado=estado,
@@ -912,7 +601,7 @@ def list_assets(
     situacao: str = "",
     q: str = "",
 ):
-    return load_points(
+    return carregar_pontos(
         view="sold",
         produto=produto,
         estado=estado,
@@ -931,7 +620,7 @@ def list_open_deals(
     etapa: str = "",
     q: str = "",
 ):
-    return load_points(
+    return carregar_pontos(
         view="open",
         produto=produto,
         estado=estado,
@@ -943,132 +632,109 @@ def list_open_deals(
 
 @app.get("/api/assets/{asset_id}")
 def get_asset(asset_id: int):
-    for item in load_points("sold"):
-        if item["asset_id"] == asset_id:
-            return item
+    for point in POINTS:
+        if point["point_type"] == "sold" and point["asset_id"] == asset_id:
+            return point
 
-    raise HTTPException(status_code=404, detail="Produto em campo nao encontrado")
+    raise HTTPException(
+        status_code=404,
+        detail="Produto em campo nao encontrado",
+    )
 
 
 @app.patch("/api/assets/{asset_id}")
 async def update_asset(asset_id: int, payload: AssetUpdate):
-    updates = []
-    params = []
+    point = None
 
-    editable_fields = [
-        "situacao_campo",
-        "data_proxima_revisao",
-        "responsavel_manutencao",
-        "observacao",
-    ]
+    for item in POINTS:
+        if item["point_type"] == "sold" and item["asset_id"] == asset_id:
+            point = item
+            break
 
-    for field in editable_fields:
-        value = getattr(payload, field)
-
-        if value is not None:
-            updates.append(f"{field} = ?")
-            params.append(value)
-
-    updates.append("updated_at = CURRENT_TIMESTAMP")
-    params.append(asset_id)
-
-    with db() as conn:
-        cur = conn.execute(
-            f"""
-            UPDATE field_assets
-            SET {', '.join(updates)}
-            WHERE id = ?
-            """,
-            params,
+    if not point:
+        raise HTTPException(
+            status_code=404,
+            detail="Produto em campo nao encontrado",
         )
 
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Produto em campo nao encontrado")
+    if payload.situacao_campo is not None:
+        point["situacao_campo"] = payload.situacao_campo
 
-        desc = payload.observacao or "Atualizacao manual realizada."
+    if payload.data_proxima_revisao is not None:
+        point["data_proxima_revisao"] = payload.data_proxima_revisao
 
-        if payload.situacao_campo:
-            desc = f"Situacao alterada para {payload.situacao_campo}. {desc}"
+    if payload.responsavel_manutencao is not None:
+        point["responsavel_manutencao"] = payload.responsavel_manutencao
 
-        conn.execute(
-            """
-            INSERT INTO maintenance_events (
-                asset_id,
-                deal_id,
-                tipo_evento,
-                descricao,
-                responsavel,
-                origem
-            )
-            VALUES (?, NULL, ?, ?, ?, ?)
-            """,
-            (
-                asset_id,
-                "Atualizacao manual",
-                desc,
-                payload.responsavel_manutencao or "Usuario teste",
-                "Plataforma",
-            ),
-        )
+    if payload.observacao is not None:
+        point["observacao"] = payload.observacao
+
+    point["updated_at"] = agora()
+
+    dias, status = calcular_status_revisao(point["data_proxima_revisao"])
+    point["dias_restantes_revisao"] = dias
+    point["status_revisao"] = status
+
+    descricao = payload.observacao or "Atualizacao manual realizada."
+
+    if payload.situacao_campo:
+        descricao = f"Situacao alterada para {payload.situacao_campo}. {descricao}"
+
+    registrar_evento(
+        asset_id=asset_id,
+        open_deal_id=None,
+        tipo_evento="Atualizacao manual",
+        descricao=descricao,
+        responsavel=payload.responsavel_manutencao or "Usuario teste",
+        origem="Plataforma",
+    )
+
+    atualizar_dados_dos_eventos()
 
     await broadcast("asset_updated", {"asset_id": asset_id})
 
-    return get_asset(asset_id)
+    return point
 
 
 @app.get("/api/assets/{asset_id}/events")
 def asset_events(asset_id: int):
-    with db() as conn:
-        rows = dict_rows(
-            conn.execute(
-                """
-                SELECT *
-                FROM maintenance_events
-                WHERE asset_id = ?
-                ORDER BY data_evento DESC
-                """,
-                (asset_id,),
-            ).fetchall()
-        )
+    atualizar_dados_dos_eventos()
 
-    return rows
+    eventos_do_ativo = [
+        event for event in EVENTS
+        if event["asset_id"] == asset_id
+    ]
+
+    return sorted(
+        eventos_do_ativo,
+        key=lambda item: item["data_evento"],
+        reverse=True,
+    )
 
 
 @app.post("/api/assets/{asset_id}/events")
 async def create_event(asset_id: int, payload: EventCreate):
-    with db() as conn:
-        exists = conn.execute(
-            """
-            SELECT id
-            FROM field_assets
-            WHERE id = ?
-            """,
-            (asset_id,),
-        ).fetchone()
+    exists = any(
+        point["point_type"] == "sold" and point["asset_id"] == asset_id
+        for point in POINTS
+    )
 
-        if not exists:
-            raise HTTPException(status_code=404, detail="Produto em campo nao encontrado")
-
-        conn.execute(
-            """
-            INSERT INTO maintenance_events (
-                asset_id,
-                deal_id,
-                tipo_evento,
-                descricao,
-                responsavel,
-                origem
-            )
-            VALUES (?, NULL, ?, ?, ?, ?)
-            """,
-            (
-                asset_id,
-                payload.tipo_evento,
-                payload.descricao,
-                payload.responsavel or "Usuario teste",
-                "Plataforma",
-            ),
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail="Produto em campo nao encontrado",
         )
+
+    registrar_evento(
+        asset_id=asset_id,
+        open_deal_id=None,
+        tipo_evento=payload.tipo_evento,
+        descricao=payload.descricao,
+        responsavel=payload.responsavel or "Usuario teste",
+        origem="Plataforma",
+    )
+
+    atualizar_dados_dos_eventos()
 
     await broadcast("event_created", {"asset_id": asset_id})
 
@@ -1077,6 +743,17 @@ async def create_event(asset_id: int, payload: EventCreate):
 
 @app.post("/api/assets/{asset_id}/attachments")
 async def upload_attachment(asset_id: int, file: UploadFile = File(...)):
+    exists = any(
+        point["point_type"] == "sold" and point["asset_id"] == asset_id
+        for point in POINTS
+    )
+
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail="Produto em campo nao encontrado",
+        )
+
     safe_name = file.filename.replace("/", "_").replace("\\", "_")
 
     folder = UPLOAD_DIR / str(asset_id)
@@ -1089,81 +766,36 @@ async def upload_attachment(asset_id: int, file: UploadFile = File(...)):
 
     url = f"/uploads/{asset_id}/{target.name}"
 
-    with db() as conn:
-        exists = conn.execute(
-            """
-            SELECT id
-            FROM field_assets
-            WHERE id = ?
-            """,
-            (asset_id,),
-        ).fetchone()
+    registrar_evento(
+        asset_id=asset_id,
+        open_deal_id=None,
+        tipo_evento="Arquivo anexado",
+        descricao=f"Arquivo anexado: {safe_name}",
+        responsavel="Usuario teste",
+        origem="Plataforma",
+    )
 
-        if not exists:
-            raise HTTPException(status_code=404, detail="Produto em campo nao encontrado")
-
-        conn.execute(
-            """
-            INSERT INTO attachments (
-                asset_id,
-                nome_arquivo,
-                caminho_arquivo,
-                tipo_arquivo
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (asset_id, safe_name, url, file.content_type),
-        )
-
-        conn.execute(
-            """
-            INSERT INTO maintenance_events (
-                asset_id,
-                deal_id,
-                tipo_evento,
-                descricao,
-                responsavel,
-                origem
-            )
-            VALUES (?, NULL, ?, ?, ?, ?)
-            """,
-            (
-                asset_id,
-                "Arquivo anexado",
-                f"Arquivo anexado: {safe_name}",
-                "Usuario teste",
-                "Plataforma",
-            ),
-        )
+    atualizar_dados_dos_eventos()
 
     await broadcast("attachment_created", {"asset_id": asset_id})
 
-    return {"ok": True, "url": url}
+    return {
+        "ok": True,
+        "url": url,
+    }
 
 
 @app.get("/api/events")
 def events(limit: int = 80):
-    with db() as conn:
-        rows = dict_rows(
-            conn.execute(
-                """
-                SELECT
-                    me.*,
-                    c.nome_empresa,
-                    COALESCE(p.nome_produto, d.produto_interesse) AS nome_produto
-                FROM maintenance_events me
-                LEFT JOIN field_assets fa ON fa.id = me.asset_id
-                LEFT JOIN deals d ON d.id = COALESCE(me.deal_id, fa.deal_id)
-                LEFT JOIN clients c ON c.id = d.client_id
-                LEFT JOIN products p ON p.id = fa.product_id
-                ORDER BY me.data_evento DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-        )
+    atualizar_dados_dos_eventos()
 
-    return rows
+    eventos_ordenados = sorted(
+        EVENTS,
+        key=lambda item: item["data_evento"],
+        reverse=True,
+    )
+
+    return eventos_ordenados[:limit]
 
 
 @app.get("/api/export/kml")
@@ -1177,7 +809,7 @@ def export_kml(
     etapa: str = "",
     q: str = "",
 ):
-    points = load_points(
+    pontos = carregar_pontos(
         view=view,
         produto=produto,
         estado=estado,
@@ -1190,17 +822,16 @@ def export_kml(
 
     placemarks = []
 
-    for point in points:
-        title = f"{point['nome_empresa']} - {point['nome_produto']}"
+    for point in pontos:
+        titulo = f"{point['nome_empresa']} - {point['nome_produto']}"
 
-        point_type = (
-            "Cliente vendido"
-            if point["point_type"] == "sold"
-            else "Negocio em aberto"
-        )
+        if point["point_type"] == "sold":
+            tipo_ponto = "Cliente vendido"
+        else:
+            tipo_ponto = "Negocio em aberto"
 
-        description = f"""
-        Tipo: {point_type}<br/>
+        descricao = f"""
+        Tipo: {tipo_ponto}<br/>
         Telefone: {point['telefone']}<br/>
         Responsavel empresa: {point['responsavel_empresa']}<br/>
         Responsavel LLK: {point['responsavel_comercial']}<br/>
@@ -1209,26 +840,26 @@ def export_kml(
         Valor: {point['valor']} {point['moeda']}<br/>
         """
 
-        placemarks.append(
-            f"""
-            <Placemark>
-              <name>{escape(title)}</name>
-              <description><![CDATA[{description}]]></description>
-              <Point>
-                <coordinates>{point['longitude']},{point['latitude']},0</coordinates>
-              </Point>
-            </Placemark>
-            """
-        )
+        placemark = f"""
+        <Placemark>
+          <name>{escape(titulo)}</name>
+          <description><![CDATA[{descricao}]]></description>
+          <Point>
+            <coordinates>{point['longitude']},{point['latitude']},0</coordinates>
+          </Point>
+        </Placemark>
+        """
+
+        placemarks.append(placemark)
 
     kml = f"""<?xml version="1.0" encoding="UTF-8"?>
-    <kml xmlns="http://www.opengis.net/kml/2.2">
-      <Document>
-        <name>LLK Field Platform - pontos filtrados</name>
-        {''.join(placemarks)}
-      </Document>
-    </kml>
-    """
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>LLK Field Platform - pontos filtrados</name>
+    {''.join(placemarks)}
+  </Document>
+</kml>
+"""
 
     return Response(
         content=kml,
@@ -1241,76 +872,42 @@ def export_kml(
 
 @app.post("/api/pipedrive/sync")
 async def pipedrive_sync():
-    with db() as conn:
-        first = conn.execute(
-            """
-            SELECT id
-            FROM field_assets
-            LIMIT 1
-            """
-        ).fetchone()
+    registrar_evento(
+        asset_id=1,
+        open_deal_id=None,
+        tipo_evento="Sincronizacao Pipedrive",
+        descricao=(
+            "Sincronizacao mockada executada. "
+            "Na versao real, buscar API do Pipedrive."
+        ),
+        responsavel="Sistema",
+        origem="Pipedrive",
+    )
 
-        if first:
-            conn.execute(
-                """
-                INSERT INTO maintenance_events (
-                    asset_id,
-                    deal_id,
-                    tipo_evento,
-                    descricao,
-                    responsavel,
-                    origem
-                )
-                VALUES (?, NULL, ?, ?, ?, ?)
-                """,
-                (
-                    first["id"],
-                    "Sincronizacao Pipedrive",
-                    "Sincronizacao mockada executada. Na versao real, buscar API do Pipedrive.",
-                    "Sistema",
-                    "Pipedrive",
-                ),
-            )
+    atualizar_dados_dos_eventos()
 
     await broadcast("pipedrive_sync", {})
 
-    return {"ok": True, "message": "Sincronizacao mockada executada"}
+    return {
+        "ok": True,
+        "message": "Sincronizacao mockada executada",
+    }
 
 
 @app.post("/api/webhooks/pipedrive")
 async def pipedrive_webhook(request: Request):
     payload = await request.json()
 
-    with db() as conn:
-        first = conn.execute(
-            """
-            SELECT id
-            FROM field_assets
-            LIMIT 1
-            """
-        ).fetchone()
+    registrar_evento(
+        asset_id=1,
+        open_deal_id=None,
+        tipo_evento="Webhook Pipedrive",
+        descricao=json.dumps(payload, ensure_ascii=False)[:700],
+        responsavel="Sistema",
+        origem="Pipedrive",
+    )
 
-        if first:
-            conn.execute(
-                """
-                INSERT INTO maintenance_events (
-                    asset_id,
-                    deal_id,
-                    tipo_evento,
-                    descricao,
-                    responsavel,
-                    origem
-                )
-                VALUES (?, NULL, ?, ?, ?, ?)
-                """,
-                (
-                    first["id"],
-                    "Webhook Pipedrive",
-                    json.dumps(payload, ensure_ascii=False)[:700],
-                    "Sistema",
-                    "Pipedrive",
-                ),
-            )
+    atualizar_dados_dos_eventos()
 
     await broadcast(
         "pipedrive_webhook",
